@@ -54,6 +54,8 @@ func Worker(mapf func(string, string) []KeyValue,
 		if reply.TaskId == -1 {
 			time.Sleep(2 * time.Second)
 			fmt.Println("no task...")
+		} else if reply.TaskId == -2 {
+			break
 		} else {
 			if reply.TaskInfo.TaskType == "Map" {
 				//do map task
@@ -70,10 +72,11 @@ func Worker(mapf func(string, string) []KeyValue,
 					}
 				}
 			} else if reply.TaskInfo.TaskType == "Reduce" {
-				oname := doReduce(reply, reducef, workerId)
+				res := doReduce(reply, reducef, workerId)
 				time.Sleep(2)
 				args.TaskId = reply.TaskId
 				args.TaskType = "Reduce"
+				args.FileList = res
 				reply.Flag = false
 				call("Coordinator.RespondforTask", &args, &reply)
 				if reply.Flag == true {
@@ -83,7 +86,7 @@ func Worker(mapf func(string, string) []KeyValue,
 					}
 				} else {
 					//respond file, remove reduce intermediate file
-					log.Printf("remove %v", oname)
+					log.Printf("remove %v", res[0])
 					//os.Remove(oname)
 				}
 			}
@@ -127,7 +130,7 @@ func doMap(mapf func(string, string) []KeyValue, filename string, numreduce int,
 	return res
 }
 
-func doReduce(args MyReply, reducef func(string, []string) string, id int) string {
+func doReduce(args MyReply, reducef func(string, []string) string, id int) []string {
 	intermediate := []KeyValue{}
 	for _, filename := range args.TaskInfo.FileList {
 		file, err := os.Open(filename)
@@ -149,10 +152,10 @@ func doReduce(args MyReply, reducef func(string, []string) string, id int) strin
 		intermediate = append(intermediate, kva...)
 		file.Close()
 	}
-	oname := fmt.Sprintf("mr-out-%d-%d", (args.TaskId-args.NumMap)%args.NumReduce, id)
-	oname = fmt.Sprintf("mr-out-%d", (args.TaskId-args.NumMap)%args.NumReduce)
+	tmpname := fmt.Sprintf("mr-out-%d-%d", (args.TaskId-args.NumMap)%args.NumReduce, id)
+	finalname := fmt.Sprintf("mr-out-%d", (args.TaskId-args.NumMap)%args.NumReduce)
 
-	ofile, _ := os.Create(oname)
+	ofile, _ := os.Create(tmpname)
 	sort.Sort(ByKey(intermediate))
 	//
 	// call Reduce on each distinct key in intermediate[],
@@ -177,7 +180,7 @@ func doReduce(args MyReply, reducef func(string, []string) string, id int) strin
 	}
 
 	ofile.Close()
-	return oname
+	return []string{tmpname, finalname}
 }
 
 //

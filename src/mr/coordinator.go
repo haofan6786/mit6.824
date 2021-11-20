@@ -63,6 +63,8 @@ func (c *Coordinator) AskforTask(args *MyArgs, reply *MyReply) error {
 				break
 			}
 		}
+	} else if c.finishedReduce == c.numReduce {
+		reply.TaskId = -2
 	} else {
 		reply.TaskId = -1
 	}
@@ -89,6 +91,7 @@ func (c *Coordinator) RespondforTask(args *MyArgs, reply *MyReply) error {
 		} else {
 			c.finishedReduce += 1
 			log.Printf("Worker %v finished Ruduce Task %d", args.WorkerId, args.TaskId)
+			os.Rename(args.FileList[0], args.FileList[1])
 			_ = 1
 		}
 	}
