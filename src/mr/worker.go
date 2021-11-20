@@ -57,20 +57,35 @@ func Worker(mapf func(string, string) []KeyValue,
 		} else {
 			if reply.TaskInfo.TaskType == "Map" {
 				//do map task
-				for _, filename := range reply.TaskInfo.FileList {
-					res := doMap(mapf, filename, reply.NumReduce, reply.TaskId, workerId)
-					args.TaskId = reply.TaskId
-					args.FileList = res
-					args.TaskType = "Map"
-
-					call("Coordinator.RespondforTask", &args, &reply)
+				filename := reply.TaskInfo.FileList[0]
+				res := doMap(mapf, filename, reply.NumReduce, reply.TaskId, workerId)
+				args.TaskId = reply.TaskId
+				args.FileList = res
+				args.TaskType = "Map"
+				reply.Flag = false
+				call("Coordinator.RespondforTask", &args, &reply)
+				if reply.Flag == false {
+					for _, filename := range args.FileList {
+						os.Remove(filename)
+					}
 				}
 			} else if reply.TaskInfo.TaskType == "Reduce" {
-				doReduce(reply, reducef)
+				oname := doReduce(reply, reducef, workerId)
 				time.Sleep(2)
 				args.TaskId = reply.TaskId
 				args.TaskType = "Reduce"
+				reply.Flag = false
 				call("Coordinator.RespondforTask", &args, &reply)
+				if reply.Flag == true {
+					//respond success, remove the map intermediate files
+					for _, filename := range reply.TaskInfo.FileList {
+						os.Remove(filename)
+					}
+				} else {
+					//respond file, remove reduce intermediate file
+					log.Printf("remove %v", oname)
+					//os.Remove(oname)
+				}
 			}
 		}
 		reply.TaskId = -1
@@ -95,12 +110,12 @@ func doMap(mapf func(string, string) []KeyValue, filename string, numreduce int,
 	intermediate := mapf(filename, string(content))
 	sort.Sort(ByKey(intermediate))
 
-	oname := "map-%d-%d"
+	oname := "map-%d-%d-%d"
 
 	file_slice := make([]*json.Encoder, numreduce)
 	for i := 0; i < len(file_slice); i++ {
-		res = append(res, fmt.Sprintf(oname, taskid, i))
-		mapfile, _ := os.Create(fmt.Sprintf(oname, taskid, i))
+		res = append(res, fmt.Sprintf(oname, taskid, workerid, i))
+		mapfile, _ := os.Create(fmt.Sprintf(oname, taskid, workerid, i))
 		file_slice[i] = json.NewEncoder(mapfile)
 	}
 	for _, kv := range intermediate {
@@ -112,7 +127,7 @@ func doMap(mapf func(string, string) []KeyValue, filename string, numreduce int,
 	return res
 }
 
-func doReduce(args MyReply, reducef func(string, []string) string) {
+func doReduce(args MyReply, reducef func(string, []string) string, id int) string {
 	intermediate := []KeyValue{}
 	for _, filename := range args.TaskInfo.FileList {
 		file, err := os.Open(filename)
@@ -134,7 +149,9 @@ func doReduce(args MyReply, reducef func(string, []string) string) {
 		intermediate = append(intermediate, kva...)
 		file.Close()
 	}
-	oname := fmt.Sprintf("mr-out-%d", (args.TaskId-args.NumMap)%args.NumReduce)
+	oname := fmt.Sprintf("mr-out-%d-%d", (args.TaskId-args.NumMap)%args.NumReduce, id)
+	oname = fmt.Sprintf("mr-out-%d", (args.TaskId-args.NumMap)%args.NumReduce)
+
 	ofile, _ := os.Create(oname)
 	sort.Sort(ByKey(intermediate))
 	//
@@ -160,6 +177,7 @@ func doReduce(args MyReply, reducef func(string, []string) string) {
 	}
 
 	ofile.Close()
+	return oname
 }
 
 //
