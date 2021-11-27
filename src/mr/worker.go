@@ -84,6 +84,7 @@ func Worker(mapf func(string, string) []KeyValue,
 					for _, filename := range reply.TaskInfo.FileList {
 						os.Remove(filename)
 					}
+					os.Rename(res[0], res[1])
 				} else {
 					//respond file, remove reduce intermediate file
 					log.Printf("remove %v", res[0])
