@@ -196,7 +196,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("[%d] received request vote from %d", rf.me, args.CandidateId)
+	DPrintf("[%d] received request vote from %v", rf.me, args)
 	//DPrintf("%d,%d", rf.votedFor, args.CandidateId)
 	reply.Term = rf.currentTerm //让candidate更新自己
 	if args.Term < rf.currentTerm || (args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
@@ -206,20 +206,33 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else if args.Term == rf.currentTerm {
 		//term相等，查看voteFor
 		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-			//voteFor为空，投一个
+			//voteFor为空,先进行election restriction 检查
+			if args.LastLogTerm > rf.logs[len(rf.logs)-1].Term ||
+				(args.LastLogTerm == rf.logs[len(rf.logs)-1].Term && args.LastLogIndex >= len(rf.logs)-1) {
+				rf.votedFor = args.CandidateId
+				rf.currentTerm = args.Term
+				reply.VoteGranted = true
+				DPrintf("[%d] vote to %d", rf.me, args.CandidateId)
+			}
+		}
+		return
+	} else {
+		////term更大,变为follower，投一个
+		//rf.toFollower(args.Term)
+		//rf.votedFor = args.CandidateId
+		//reply.VoteGranted = true
+		//DPrintf("[%d] vote to %d", rf.me, args.CandidateId)
+		//return
+		rf.toFollower(args.Term)
+		//DPrintf("????????? %d,%d",rf.logs[len(rf.logs)-1].Term,len(rf.logs)-1)
+		//voteFor为空,先进行election restriction 检查
+		if args.LastLogTerm > rf.logs[len(rf.logs)-1].Term ||
+			(args.LastLogTerm == rf.logs[len(rf.logs)-1].Term && args.LastLogIndex >= len(rf.logs)-1) {
 			rf.votedFor = args.CandidateId
 			rf.currentTerm = args.Term
 			reply.VoteGranted = true
 			DPrintf("[%d] vote to %d", rf.me, args.CandidateId)
 		}
-		return
-	} else {
-		//term更大,变为follower，投一个
-		rf.toFollower(args.Term)
-		rf.votedFor = args.CandidateId
-		reply.VoteGranted = true
-		DPrintf("[%d] vote to %d", rf.me, args.CandidateId)
-		return
 	}
 }
 
@@ -281,7 +294,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
-	DPrintf("[%d] received HeartBeat from %d:%v,commitIndex=%d", rf.me, args.LeaderId, args, rf.commitIndex)
+	DPrintf("[%d] received HeartBeat from %d:%v,commitIndex=%d,len of log=%d", rf.me, args.LeaderId, args, rf.commitIndex, len(rf.logs))
 	if rf.currentTerm > args.Term {
 		//旧的term，拒绝请求
 		reply.Success = false
@@ -295,10 +308,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if len(args.Entries) == 0 {
 			//心跳包走到这一步表明目前日志一样，无需同步
 			//或者是Leader log长度为0，无需同步
+			if args.PrevLogIndex > len(rf.logs)-1 || rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+				//1.log中没有PrevLogIndex这一条，返回false
+				//2.对应PrevLohIndex的log的term不匹配，返回false
+				reply.Success = false
+				return
+			}
 			reply.Success = true
 		} else {
 			//非心跳包,开始同步日志
-			if args.PrevLogIndex > len(rf.logs) || rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+			if args.PrevLogIndex > len(rf.logs)-1 || rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
 				//1.log中没有PrevLogIndex这一条，返回false
 				//2.对应PrevLohIndex的log的term不匹配，返回false
 				reply.Success = false
@@ -507,6 +526,8 @@ func (rf *Raft) startElection() {
 			rf.mu.Lock()
 			args.Term = rf.currentTerm
 			args.CandidateId = rf.me
+			args.LastLogIndex = rf.logs[len(rf.logs)-1].Index
+			args.LastLogTerm = rf.logs[len(rf.logs)-1].Term
 			rf.mu.Unlock()
 			resultVote := rf.sendRequestVote(index, &args, &reply)
 			//DPrintf("[%d] args:%v,reply:%v", rf.me, args, reply)
@@ -593,10 +614,15 @@ func (rf *Raft) sendHeartBeat(server int) {
 			for N := len(rf.logs) - 1; N > 0 && rf.logs[N].Term == rf.currentTerm; N-- {
 				count := 0
 				for i := 0; i < len(rf.peers); i++ {
-					if i != rf.me || rf.matchIndex[server] >= N {
+					if i == rf.me || rf.matchIndex[i] >= N {
 						count++
 					}
 				}
+				//fmt.Printf("[%d]:", rf.me)
+				//for i := 0; i < len(rf.peers); i++ {
+				//	fmt.Printf("%d ", rf.matchIndex[i])
+				//}
+				//fmt.Printf(">>>N=%d:count=%d\n", N, count)
 				if count >= (len(rf.peers)+1)/2 && rf.commitIndex < N {
 					DPrintf("!!!!!!!!!!!!!!update commitIndex=,%d", N)
 					for i := rf.commitIndex + 1; i <= N; i++ {
@@ -624,7 +650,7 @@ func (rf *Raft) sendHeartBeat(server int) {
 		//由于网络原因发送失败,重新发送,暂时先不重新发送，等下一次心跳
 		//goto send
 		//rf.sendHeartBeat(server)
-		DPrintf("[%d] loss HeartBeat to %d:%v",args.LeaderId,server,args)
+		DPrintf("[%d] loss HeartBeat to %d:%v", args.LeaderId, server, args)
 	}
 }
 
