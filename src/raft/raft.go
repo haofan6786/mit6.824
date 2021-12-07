@@ -264,8 +264,10 @@ func (rf *Raft) toFollower(term int) {
 		DPrintf("[%d-%v-%d-%d]-%v:%d become follower:%d", rf.me, rf.state, rf.currentTerm, len(rf.logs), rf.state, rf.currentTerm, term)
 	}
 	rf.state = Follower
+	if term > rf.currentTerm {
+		rf.votedFor = -1
+	}
 	rf.currentTerm = term
-	rf.votedFor = -1
 }
 
 //with lock
@@ -278,13 +280,13 @@ func (rf *Raft) toLeader() {
 		rf.nextIndex[index] = len(rf.logs) //log从下标1开始计数,初始时len(log)=1,nextIndex=1
 		rf.matchIndex[index] = 0
 	}
-	//for server, _ := range rf.peers {
-	//	if rf.me == server {
-	//		continue
-	//	}
-	//	go rf.sendHeartBeat(server)
-	//}
-	//DPrintf("%v,%v", rf.nextIndex, rf.matchIndex)
+	for server, _ := range rf.peers {
+		if rf.me == server {
+			continue
+		}
+		go rf.sendHeartBeat(server)
+	}
+	//DPrintf("[%d-%v-%d-%d] next%v,%v", rf.nextIndex, rf.matchIndex)
 }
 
 //with lock
@@ -354,20 +356,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 	}
-	//if len(args.Entries) > 0 {
-	//	DPrintf("[%d-%v-%d-%d] old logs:%v", rf.me, rf.state, rf.currentTerm, len(rf.logs), rf.logs)
-	//}
+	if len(args.Entries) > 0 {
+		DPrintf("[%d-%v-%d-%d] old logs:%v", rf.me, rf.state, rf.currentTerm, len(rf.logs), rf.logs)
+	}
 	rf.logs = rf.logs[:args.PrevLogIndex+2+matchIndex]
 	rf.logs = append(rf.logs, args.Entries[matchIndex+1:]...)
-	//if len(args.Entries) > 0 {
-	//	DPrintf("[%d-%v-%d-%d] new logs:%v", rf.me, rf.state, rf.currentTerm, len(rf.logs), rf.logs)
-	//}
+	if len(args.Entries) > 0 {
+		DPrintf("[%d-%v-%d-%d] new logs:%v", rf.me, rf.state, rf.currentTerm, len(rf.logs), rf.logs)
+	}
 
 	if args.LeaderCommit > rf.commitIndex { //5.修改commitIndex，并将新的log进行apply
 		newCommitIndex := min(args.LeaderCommit, len(rf.logs)-1)
-		if rf.logs[newCommitIndex].Term == rf.currentTerm {
-			rf.commitIndex = newCommitIndex
-		}
+		//if rf.logs[newCommitIndex].Term == rf.currentTerm {
+		DPrintf("[%d-%v-%d-%d] !!!!!!!update commitIndex from %d to %d,log=%v", rf.me, rf.state, rf.currentTerm, len(rf.logs), rf.commitIndex, newCommitIndex, rf.logs)
+		rf.commitIndex = newCommitIndex
+		//}
 	}
 }
 
@@ -679,8 +682,10 @@ func (rf *Raft) sendHeartBeat(server int) {
 					}
 				}
 				if count >= (len(rf.peers)+1)/2 && rf.commitIndex < N {
-					DPrintf("!!!!!!!!!!!!!!update commitIndex=,%d", N)
+					//DPrintf("[%d-%v-%d-%d] !!!!!!!!!!!!!!update commitIndex=%d,log=%v", rf.me, rf.state, rf.currentTerm, len(rf.logs), N, rf.logs)
+					//DPrintf("!!!!!!!!!!!!!!update commitIndex=,%d", )
 					if rf.logs[N].Term == rf.currentTerm {
+						DPrintf("[%d-%v-%d-%d] !!!!!!!update commitIndex from %d to %d,log=%v", rf.me, rf.state, rf.currentTerm, len(rf.logs), rf.commitIndex, N, rf.logs)
 						rf.commitIndex = N
 					}
 					break
